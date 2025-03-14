@@ -1,0 +1,106 @@
+# Import required libraries
+import pandas as pd
+import numpy as np
+
+# Load Opta-style event data
+# Replace 'opta_event_data.csv' with your actual file path
+data = pd.read_csv('opta_event_data.csv')
+
+# Display the first few rows of the data
+print("Raw Data:")
+print(data.head())
+
+# Step 1: Calculate Pressures
+# Infer pressures based on opponent actions
+data['pressure'] = 0
+
+# 1. Incomplete passes
+data.loc[(data['event_type'] == 'pass') & (data['outcome'] == 'incomplete'), 'pressure'] = 1
+
+# 2. Unsuccessful dribbles
+data.loc[(data['event_type'] == 'dribble') & (data['outcome'] == 'unsuccessful'), 'pressure'] = 1
+
+# 3. Blocked shots
+data.loc[(data['event_type'] == 'shot') & (data['outcome'] == 'blocked'), 'pressure'] = 1
+
+# 4. Defensive actions (tackles, interceptions, fouls)
+data.loc[data['event_type'].isin(['tackle', 'interception', 'foul']), 'pressure'] = 1
+
+# Group by player and calculate total pressures
+player_pressures = data.groupby('player_id')['pressure'].sum().reset_index()
+
+# Sort players by total pressures
+player_pressures = player_pressures.sort_values(by='pressure', ascending=False)
+
+# Display top 10 players by pressures
+print("\nTop 10 Players by Pressures:")
+print(player_pressures.head(10))
+
+# Step 2: Define Action Weights and Location-Based Weighting
+# Define action weights (based on impact)
+action_weights = {
+    'pressure': 0.5,  # Weight for pressures
+    'overturn_recovery': 1.0,
+    'tackle': 1.2,
+    'interception': 1.5,
+    'duel': 0.8
+}
+
+# Define location-based weighting
+def get_location_weight(x, y):
+    """
+    Assign a weight based on the location of the action.
+    - Final third: 1.5
+    - Middle third: 1.2
+    - Defensive third: 1.0
+    """
+    if x > 66:  # Final third
+        return 1.5
+    elif x > 33:  # Middle third
+        return 1.2
+    else:  # Defensive third
+        return 1.0
+
+# Step 3: Calculate Disruption Value
+# Initialize disruption value column
+data['disruption_value'] = 0
+
+# Pressures
+data['disruption_value'] += (
+    data['pressure'] * action_weights['pressure'] * data.apply(lambda row: get_location_weight(row['x'], row['y']), axis=1)
+)
+
+# Overturns/recoveries
+data.loc[data['event_type'] == 'recovery', 'disruption_value'] += (
+    action_weights['overturn_recovery'] * data.apply(lambda row: get_location_weight(row['x'], row['y']), axis=1)
+)
+
+# Tackles
+data.loc[data['event_type'] == 'tackle', 'disruption_value'] += (
+    action_weights['tackle'] * data.apply(lambda row: get_location_weight(row['x'], row['y']), axis=1)
+)
+
+# Interceptions
+data.loc[data['event_type'] == 'interception', 'disruption_value'] += (
+    action_weights['interception'] * data.apply(lambda row: get_location_weight(row['x'], row['y']), axis=1)
+)
+
+# Duels
+data.loc[data['event_type'] == 'duel', 'disruption_value'] += (
+    action_weights['duel'] * data.apply(lambda row: get_location_weight(row['x'], row['y']), axis=1)
+)
+
+# Step 4: Aggregate Disruption Value by Player
+# Group by player and calculate total disruption value
+player_disruption = data.groupby('player_id')['disruption_value'].sum().reset_index()
+
+# Sort players by disruption value
+player_disruption = player_disruption.sort_values(by='disruption_value', ascending=False)
+
+# Display top 10 players by disruption value
+print("\nTop 10 Players by Disruption Value:")
+print(player_disruption.head(10))
+
+# Save results to a CSV file (optional)
+player_disruption.to_csv('player_disruption_values.csv', index=False)
+print("\nResults saved to 'player_disruption_values.csv'.")
