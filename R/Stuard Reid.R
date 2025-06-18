@@ -5,6 +5,7 @@ library(StatsBombR)
 library(dplyr)
 library(purrr)
 library(openxlsx)
+library(lubridate)
 
 # =========================
 # User credentials
@@ -161,7 +162,7 @@ for (match_id in unique(all_matches$match_id)) {
                  shot_location_y = purrr::map_dbl(location.y, ~ if (!is.null(.x)) .x[[2]] else NA_real_),
                  shot_location_z = purrr::map_dbl(location.y, ~ if (!is.null(.x) && length(.x) >= 3) .x[[3]] else NA_real_),
                  Defensive_setup = purrr::map_chr(shot.freeze_frame, ~ get_defensive_setup_flat(.x))) %>%
-          select(match_id, Match, pass_timestamp, Taker, pass_position, pass.height.name, pass.body_part.name,
+          select(match_id, Match, possession, pass_timestamp, Taker, pass_position, pass.height.name, pass.body_part.name,
                  pass.outcome.name, pass.technique.name, pass_location_x, pass_location_y,
                  pass_end_location_x, pass_end_location_y,
                  shot_timestamp, Shooter, shot_position, shot.body_part.name,
@@ -180,12 +181,41 @@ for (match_id in unique(all_matches$match_id)) {
 }
 
 # =========================
-# Save the results
+# Final Processing and Save
 # =========================
 if (length(all_corners_shots_list) > 0) {
   final_df <- bind_rows(all_corners_shots_list)
+  
+  # Extract Minute and Second from pass_timestamp
+  final_df <- final_df %>%
+    mutate(
+      pass_time = hms(pass_timestamp),
+      Minute = minute(pass_time),
+      Second = second(pass_time)
+    )
+  
+  # Calculate SP_outcome based on time difference
+  final_df <- final_df %>%
+    group_by(match_id, possession) %>%
+    mutate(
+      pass_time_sec = as.numeric(hms(pass_timestamp)),
+      shot_time_sec = as.numeric(hms(shot_timestamp)),
+      time_diff = shot_time_sec - pass_time_sec,
+      min_time_diff = suppressWarnings(min(time_diff[!is.na(time_diff)], na.rm = TRUE)),
+      SP_outcome = case_when(
+        all(is.na(shot_timestamp)) ~ 'No first contact - no shot',
+        min_time_diff == 0 ~ 'First contact - direct shot',
+        min_time_diff > 0 & min_time_diff <= 3 ~ 'First contact - shot within 3 seconds',
+        min_time_diff > 3 ~ 'No first contact - shot',
+        TRUE ~ 'First contact - no shot'
+      )
+    ) %>%
+    ungroup() %>%
+    select(-pass_time_sec, -shot_time_sec, -time_diff, -min_time_diff, -pass_time)
+  
   write.xlsx(final_df, "corner_passes_and_shots_defensive_setup.xlsx")
-  cat("✅ Data saved to corner_passes_and_shots_defensive_setup.xlsx\n")
+  cat("✅ Data saved to corner_passes_and_shots_defensive_setup.xlsx with SP_outcome, Minute, and Second columns\n")
+  
 } else {
   cat("⚠️ No corner passes found across matches.\n")
 }
